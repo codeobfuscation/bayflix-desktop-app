@@ -21,6 +21,8 @@ jobs:
             target: linux
           - os: macos-latest
             target: mac
+          - os: windows-latest
+            target: win
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -73,5 +75,17 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           gh release upload "$TAG" \
             dist/*.dmg \
+            --clobber \
+            --repo ${{ github.repository }}
+
+      - name: Upload Windows artifacts
+        if: matrix.target == 'win'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release upload "$TAG" \
+            "dist/Bayflix Setup ${TAG#v}.exe" \
             --clobber \
             --repo ${{ github.repository }}
