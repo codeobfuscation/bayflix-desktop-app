@@ -119,6 +119,7 @@
       ]
     },
     "linux": {
+      "maintainer": "Necrosis <root@cwi-group.org>",
       "target": [
         {
           "target": "AppImage",

@@ -40,6 +40,10 @@ jobs:
           path: ~/.cache/electron-builder
           key: ${{ matrix.os }}-electron-builder-${{ hashFiles('package-lock.json') }}
 
+      - name: Install Linux packaging tools
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+
       - name: Install dependencies
         run: npm ci
 
