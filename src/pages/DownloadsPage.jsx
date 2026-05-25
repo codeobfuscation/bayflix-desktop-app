@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, memo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import {
   DownloadIcon,
   TrashIcon,
@@ -8,7 +8,7 @@ import {
   WatchedIcon,
   SubtitlesIcon,
 } from "../components/Icons";
-import { storage, isElectron } from "../utils/storage";
+import { storage, isElectron, STORAGE_KEYS } from "../utils/storage";
 import SubtitleDownloaderModal from "../components/SubtitleDownloaderModal";
 import { imgUrl } from "../utils/api";
 
@@ -56,6 +56,29 @@ const Poster = memo(function Poster({ posterPath, size = 48 }) {
   );
 });
 
+// ── Size parser for sorting ───────────────────────────────────────────────────
+function parseSize(str) {
+  if (!str) return 0;
+  const m = String(str).match(/([\d.]+)\s*(B|KB|MB|GB|TB)/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  const map = {
+    B: 1,
+    KB: 1024,
+    MB: 1048576,
+    GB: 1073741824,
+    TB: 1099511627776,
+  };
+  return n * (map[m[2].toUpperCase()] || 1);
+}
+
+const SORT_OPTIONS = [
+  { value: "date", label: "Date" },
+  { value: "name", label: "Name" },
+  { value: "size", label: "Size" },
+  { value: "type", label: "Type" },
+];
+
 export default function DownloadsPage({
   downloads,
   onDeleteDownload,
@@ -70,6 +93,8 @@ export default function DownloadsPage({
   onSelect,
   onUpdateDownload,
   onSettings,
+  searchOpen: searchOpenProp = false,
+  onSearchClose,
 }) {
   const [fileExistsCache, setFileExistsCache] = useState({});
   const [localFiles, setLocalFiles] = useState(
@@ -82,10 +107,124 @@ export default function DownloadsPage({
   const highlightRef = useRef(null);
   const [subtitleModalDl, setSubtitleModalDl] = useState(null);
 
-  const active = downloads.filter((d) => d.status === "downloading");
-  const finished = downloads
-    .filter((d) => d.status !== "downloading")
-    .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  // ── Toolbar state ─────────────────────────────────────────────
+  const [showUntracked, setShowUntracked] = useState(
+    () => storage.get(STORAGE_KEYS.DL_SHOW_UNTRACKED) ?? true,
+  );
+  const [sortBy, setSortBy] = useState(
+    () => storage.get(STORAGE_KEYS.DL_SORT_BY) ?? "date",
+  );
+  const [sortDir, setSortDir] = useState(
+    () => storage.get(STORAGE_KEYS.DL_SORT_DIR) ?? "desc",
+  );
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef(null);
+
+  // Persist whenever values change
+  useEffect(() => {
+    storage.set(STORAGE_KEYS.DL_SORT_BY, sortBy);
+  }, [sortBy]);
+  useEffect(() => {
+    storage.set(STORAGE_KEYS.DL_SORT_DIR, sortDir);
+  }, [sortDir]);
+  useEffect(() => {
+    storage.set(STORAGE_KEYS.DL_SHOW_UNTRACKED, showUntracked);
+  }, [showUntracked]);
+
+  // Sync externally-triggered open (Ctrl+K from App.jsx)
+  useEffect(() => {
+    if (searchOpenProp) {
+      setSearchOpen(true);
+      onSearchClose?.();
+    }
+  }, [searchOpenProp]);
+
+  // Escape closes search
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape") {
+        setSearchOpen(false);
+        setSearchQuery("");
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  useEffect(() => {
+    if (searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50);
+  }, [searchOpen]);
+
+  // ── Stable derived lists ──────────────────────────────────────
+  const active = useMemo(
+    () => downloads.filter((d) => d.status === "downloading"),
+    [downloads],
+  );
+
+  const finished = useMemo(
+    () =>
+      downloads
+        .filter((d) => d.status !== "downloading")
+        .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)),
+    [downloads],
+  );
+
+  const localFileItems = useMemo(
+    () =>
+      localFiles.map((f) => ({
+        id: f.filePath,
+        name: f.name,
+        filePath: f.filePath,
+        size: f.size,
+        status: "local",
+        isLocalOnly: true,
+      })),
+    [localFiles],
+  );
+
+  const allLocalItemsRaw = useMemo(() => {
+    const finishedVisible = finished.filter(
+      (d) => fileExistsCache[d.id] !== false,
+    );
+    const finishedPaths = new Set(finished.map((d) => d.filePath));
+    const extraLocal = localFileItems.filter(
+      (lf) => !finishedPaths.has(lf.filePath),
+    );
+    return [...finishedVisible, ...extraLocal];
+  }, [finished, localFileItems, fileExistsCache]);
+
+  const untrackedCount = useMemo(
+    () => allLocalItemsRaw.filter((d) => d.isLocalOnly).length,
+    [allLocalItemsRaw],
+  );
+
+  const allLocalItems = useMemo(() => {
+    // 1. Untracked filter
+    const step1 = showUntracked
+      ? allLocalItemsRaw
+      : allLocalItemsRaw.filter((d) => !d.isLocalOnly);
+
+    // 2. Search filter
+    const q = searchQuery.trim().toLowerCase();
+    const step2 = q
+      ? step1.filter((d) => (d.name || "").toLowerCase().includes(q))
+      : step1;
+
+    // 3. Sort (spread once here, not in render)
+    return [...step2].sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "date") cmp = (a.completedAt || 0) - (b.completedAt || 0);
+      if (sortBy === "name") cmp = (a.name || "").localeCompare(b.name || "");
+      if (sortBy === "size") cmp = parseSize(a.size) - parseSize(b.size);
+      if (sortBy === "type")
+        cmp = (a.mediaType || "local").localeCompare(b.mediaType || "local");
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+  }, [allLocalItemsRaw, showUntracked, searchQuery, sortBy, sortDir]);
+
+  const q = searchQuery.trim().toLowerCase();
+  const searchResultCount = q ? allLocalItems.length : null;
 
   useEffect(() => {
     if (!highlightId || !highlightRef.current) return;
@@ -139,7 +278,7 @@ export default function DownloadsPage({
     return () => {
       mounted = false;
     };
-  }, [finished.length, onDeleteDownload]);
+  }, [finished, onDeleteDownload, onUpdateDownload]);
 
   const handleScanFolder = useCallback(async () => {
     if (!isElectron || !scanFolder) return;
@@ -172,38 +311,28 @@ export default function DownloadsPage({
     }
   }, [scanFolder, downloads, finished, onUpdateDownload]);
 
-  const handleDelete = async (dl) => {
-    if (!confirm(`Delete "${dl.name}"${dl.filePath ? " and its file" : ""}?`))
-      return;
-    await window.electron.deleteDownload({ id: dl.id, filePath: dl.filePath });
-    // Clean up persisted duration
-    if (dl.id) storage.set(DURATION_PREFIX + dl.id, null);
-    // Clean up persisted progress time
-    const watchedKey =
-      dl.mediaType === "movie"
-        ? `movie_${dl.tmdbId || dl.mediaId}`
-        : dl.mediaType === "tv" && dl.tmdbId && dl.season && dl.episode
-          ? `tv_${dl.tmdbId}_s${dl.season}e${dl.episode}`
-          : null;
-    if (watchedKey) storage.set(PROGRESS_TIME_PREFIX + watchedKey, null);
-    onDeleteDownload(dl.id);
-  };
-
-  const localFileItems = localFiles.map((f) => ({
-    id: f.filePath,
-    name: f.name,
-    filePath: f.filePath,
-    size: f.size,
-    status: "local",
-    isLocalOnly: true,
-  }));
-
-  const allLocalItems = [
-    ...finished.filter((d) => fileExistsCache[d.id] !== false),
-    ...localFileItems.filter(
-      (lf) => !finished.some((d) => d.filePath === lf.filePath),
-    ),
-  ];
+  const handleDelete = useCallback(
+    async (dl) => {
+      if (!confirm(`Delete "${dl.name}"${dl.filePath ? " and its file" : ""}?`))
+        return;
+      await window.electron.deleteDownload({
+        id: dl.id,
+        filePath: dl.filePath,
+      });
+      // Clean up persisted duration
+      if (dl.id) storage.set(DURATION_PREFIX + dl.id, null);
+      // Clean up persisted progress time
+      const watchedKey =
+        dl.mediaType === "movie"
+          ? `movie_${dl.tmdbId || dl.mediaId}`
+          : dl.mediaType === "tv" && dl.tmdbId && dl.season && dl.episode
+            ? `tv_${dl.tmdbId}_s${dl.season}e${dl.episode}`
+            : null;
+      if (watchedKey) storage.set(PROGRESS_TIME_PREFIX + watchedKey, null);
+      onDeleteDownload(dl.id);
+    },
+    [onDeleteDownload],
+  );
 
   return (
     <div className="fade-in dl-page">
@@ -247,7 +376,113 @@ export default function DownloadsPage({
       <div className="dl-page__title">DOWNLOADS</div>
       <div className="dl-page__subtitle">
         {active.length > 0 ? `${active.length} active` : "No active downloads"}{" "}
-        · {allLocalItems.length} completed
+        · {allLocalItemsRaw.length} completed
+      </div>
+
+      {/* ── Ctrl+K Search bar ─────────────────────────────────────────────── */}
+      {searchOpen && (
+        <div className="dl-search-bar">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="var(--text3)"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ flexShrink: 0 }}
+          >
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            ref={searchInputRef}
+            className="dl-search-bar__input"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Filter downloads…"
+          />
+          {q && (
+            <span className="dl-search-bar__count">
+              {searchResultCount === 0
+                ? "No results"
+                : `${searchResultCount} result${searchResultCount !== 1 ? "s" : ""}`}
+            </span>
+          )}
+          <button
+            className="dl-search-bar__close"
+            onClick={() => {
+              setSearchOpen(false);
+              setSearchQuery("");
+            }}
+            title="Close (Esc)"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ── Toolbar ───────────────────────────────────────────────────────── */}
+      <div className="dl-toolbar">
+        {/* Left: sort controls */}
+        <div className="dl-toolbar__group">
+          <span className="dl-toolbar__label">Sort by</span>
+          <div className="dl-toolbar__sort-btns">
+            {SORT_OPTIONS.map(({ value, label }) => (
+              <button
+                key={value}
+                className={`dl-toolbar__sort-btn${sortBy === value ? " dl-toolbar__sort-btn--active" : ""}`}
+                onClick={() => setSortBy(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            className="dl-toolbar__dir-btn"
+            onClick={() => setSortDir((d) => (d === "desc" ? "asc" : "desc"))}
+            title={sortDir === "desc" ? "Descending" : "Ascending"}
+          >
+            {sortDir === "desc" ? "↓" : "↑"}
+          </button>
+        </div>
+
+        {/* Right: untracked toggle + search shortcut hint */}
+        <div className="dl-toolbar__group">
+          <button
+            className={`dl-toolbar__toggle${showUntracked ? " dl-toolbar__toggle--on" : ""}`}
+            onClick={() => setShowUntracked((v) => !v)}
+            title={
+              showUntracked ? "Hide untracked files" : "Show untracked files"
+            }
+          >
+            {showUntracked ? "⊙" : "⊘"} Untracked
+            {untrackedCount > 0 ? ` (${untrackedCount})` : ""}
+          </button>
+          {!searchOpen && (
+            <button
+              className="dl-toolbar__search-hint"
+              onClick={() => setSearchOpen(true)}
+              title="Search (Ctrl+K)"
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <span className="dl-toolbar__search-hint-key">Ctrl+K</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {active.length > 0 && (
@@ -392,9 +627,11 @@ export default function DownloadsPage({
           </div>
         ) : (
           <div className="dl-page__empty-text">
-            {downloads.length === 0 && localFiles.length === 0
-              ? "No local files yet. Scan a folder or start a download."
-              : "No completed downloads or local files found."}
+            {q
+              ? `No downloads match "${searchQuery}".`
+              : downloads.length === 0 && localFiles.length === 0
+                ? "No local files yet. Scan a folder or start a download."
+                : "No completed downloads or local files found."}
           </div>
         )}
       </div>

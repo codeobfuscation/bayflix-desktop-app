@@ -1,6 +1,6 @@
 {
   "name": "bayflix",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Bayflix Desktop App",
   "author": "Necrosis",
   "license": "GPL-3.0",
@@ -15,7 +15,7 @@
     "dist:arch": "cross-env ELECTRON_DIST=1 vite build && electron-builder --linux pacman --publish never",
     "dist:appimage": "cross-env ELECTRON_DIST=1 vite build && electron-builder --linux AppImage --publish never",
     "dist:win": "cross-env ELECTRON_DIST=1 vite build && electron-builder --win --publish never",
-    "dist:mac": "cross-env ELECTRON_DIST=1 vite build && electron-builder --mac --publish never"
+    "dist:mac": "cross-env ELECTRON_DIST=1 vite build && electron-builder --mac --universal --publish never"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -41,6 +41,9 @@
       "dist/**/*",
       "!dist/mac/**",
       "!dist/mac-arm64/**",
+      "!dist/mac-universal/**",
+      "!dist/mac-universal-x64-temp/**",
+      "!dist/mac-universal-arm64-temp/**",
       "!dist/win-unpacked/**",
       "!dist/linux-unpacked/**",
       "!dist/*.dmg",
@@ -97,8 +100,7 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
-            "arm64"
+            "universal"
           ]
         }
       ],
@@ -141,7 +143,16 @@
         }
       ],
       "category": "Utility",
-      "icon": "public/icon.png"
+      "icon": "public/sized",
+      "desktop": {
+        "entry": {
+          "Name": "Bayflix",
+          "Comment": "Bayflix Desktop App",
+          "Categories": "AudioVideo;Video;Player;Multimedia;Internet;",
+          "Icon": "bayflix",
+          "StartupWMClass": "Bayflix"
+        }
+      }
     },
     "electronLanguages": [
       "en-US",

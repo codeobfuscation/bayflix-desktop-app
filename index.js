@@ -1,4 +1,4 @@
-// -- Bayflix main process entry point ------------------------------------------
+// -- Bayflix main process entry point ---------------------------------------
 // Responsible for: window creation, session setup, ad-blocking, scheduled
 // backup trigger, and app lifecycle. All heavy IPC logic lives in src/ipc/.
 
@@ -213,6 +213,9 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: "#0a0a0a",
+    icon: process.platform === "linux"
+      ? path.join(__dirname, "public/sized/256x256.png")
+      : undefined,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     frame: process.platform !== "win32",
     webPreferences: {

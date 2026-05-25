@@ -40,6 +40,7 @@ export default function App() {
   const [page, setPage] = useState(() => storage.get("startPage") || "home");
   const [selected, setSelected] = useState(null);
   const [showSearch, setShowSearch] = useState(false);
+  const [dlSearchOpen, setDlSearchOpen] = useState(false);
   const [librarySort, setLibrarySort] = useState(
     () => storage.get(STORAGE_KEYS.LIBRARY_SORT) || "manual",
   );
@@ -122,7 +123,7 @@ export default function App() {
     let cancelled = false;
 
     async function checkNewEpisodes() {
-      // Small grace period so the UI has fully painted before we start
+      // Small grace period so the UI has fully painted before start
       await new Promise((r) => setTimeout(r, 1200));
       if (cancelled) return;
 
@@ -198,7 +199,7 @@ export default function App() {
                 }
               } else {
                 // Subsequent checks: notify when last_episode_to_air changed
-                // (new episode aired) compared to what we cached.
+                // (new episode aired) compared to what got cached.
                 // Migration: old cache entries only have nextEpDate, not lastEpDate.
                 // In that case treat as first check to avoid false positives.
                 const prevLastDate = prev.lastEpDate ?? null;
@@ -462,11 +463,19 @@ export default function App() {
   // ── Trending, single shared fetch fn avoids code duplication ────────────
   // Results are cached in localStorage for 30 min to avoid redundant API calls
   // and to keep trending data out of RAM between restarts.
+  // The cache stores the active metadata language; if it differs from the
+  // current setting the cache is treated as stale and data is re-fetched.
   const fetchTrending = useCallback(() => {
     if (!apiKey) return;
     const cached = storage.get("trendingCache");
     const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-    if (cached && cached.ts && Date.now() - cached.ts < CACHE_TTL) {
+    const currentLang = storage.get(STORAGE_KEYS.TMDB_LANG) || "en-US";
+    if (
+      cached &&
+      cached.ts &&
+      cached.lang === currentLang &&
+      Date.now() - cached.ts < CACHE_TTL
+    ) {
       setTrending(cached.movies || []);
       setTrendingTV(cached.tv || []);
       return;
@@ -481,7 +490,7 @@ export default function App() {
         const tv = t.results || [];
         setTrending(movies);
         setTrendingTV(tv);
-        storage.set("trendingCache", { movies, tv, ts: Date.now() });
+        storage.set("trendingCache", { movies, tv, ts: Date.now(), lang: currentLang });
       })
       .catch(() => {})
       .finally(() => setLoadingHome(false));
@@ -503,6 +512,14 @@ export default function App() {
     return () =>
       window.removeEventListener("bayflix:library-sort-changed", handler);
   }, []);
+
+  // ── Re-fetch trending immediately when metadata language changes ──────────
+  useEffect(() => {
+    const handler = () => fetchTrending();
+    window.addEventListener("bayflix:tmdb-lang-changed", handler);
+    return () =>
+      window.removeEventListener("bayflix:tmdb-lang-changed", handler);
+  }, [fetchTrending]);
   useEffect(() => {
     // Accent colour
     const accent = storage.get(STORAGE_KEYS.ACCENT_COLOR) || "red";
@@ -574,6 +591,12 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
         e.preventDefault();
         setShowSearch(true);
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        if (pageRef.current === "downloads") {
+          e.preventDefault();
+          setDlSearchOpen(true);
+        }
       }
       if (e.key === "Escape") {
         setShowSearch(false);
@@ -966,6 +989,8 @@ export default function App() {
                 highlightId={highlightDownload}
                 onClearHighlight={() => setHighlightDownload(null)}
                 onSelect={handleSelectResult}
+                searchOpen={dlSearchOpen}
+                onSearchClose={() => setDlSearchOpen(false)}
                 onSettings={(section) =>
                   navigate("settings", { section: section || null })
                 }
